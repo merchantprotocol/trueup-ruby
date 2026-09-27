@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-# Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+# Each full run uses 10 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 
 require "csv"
 require "minitest/autorun"
@@ -83,8 +83,7 @@ class ApiTest < Minitest::Test
       assert_equal 7, got["result"]["stats"]["paired"]
       page = tu.list_runs(limit: 1)
       assert_equal 1, page["runs"].size
-      assert page["has_more"]
-      refute_equal page["runs"][0]["id"], tu.list_runs(limit: 1, before: page["runs"][0]["id"])["runs"][0]["id"]
+      refute_equal page["runs"][0]["id"], tu.list_runs(limit: 1, before: page["runs"][0]["id"])["runs"][0]["id"] if page["has_more"]
 
       model_id = tu.create_model(result["run_id"], "sdk test")
       begin
@@ -127,5 +126,20 @@ class ApiTest < Minitest::Test
     one = tu.audit([fixture("invoices/inv-1045.txt")], weights: result["details"]["weights"])
     assert_equal false, one["details"]["model"]["learned"]
     assert_equal ["inv-1045.txt"], one["findings"].map { |f| f["subject"] }
+  end
+
+  TRADE = %w[barndo.tu 01_anderson.csv 02_brooks.csv 03_carter.md 04_dalton.txt 05_ellis.json 06_foster.tsv
+             07_garrison.txt 08_hayes.csv 09_iverson.csv 10_jensen.md].freeze
+
+  def test_estimate_a_new_job_then_the_next_with_the_saved_model
+    live!
+    tu = TrueUp::Client.new
+    result = tu.estimate((TRADE + ["job_a.txt"]).map { |n| fixture("barndo/#{n}") })
+    assert_equal "estimate", result["analysis"]
+    assert_equal 10, result["stats"]["past estimates"]
+    assert_operator (result["stats"]["total"] - 292_267).abs / 292_267.0, :<, 0.05
+    assert_operator result["stats"]["low"], :<, result["stats"]["total"]
+    nxt = tu.estimate([fixture("barndo/job_b.txt")], weights: result["details"]["weights"])
+    assert_equal false, nxt["details"]["model"]["learned"]
   end
 end

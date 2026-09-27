@@ -185,6 +185,20 @@ module TrueUp
       stored("/v1/audit", nil, nil, file_ids, model, nil)
     end
 
+    # Price a new job from past estimates: a domain file for the trade (.tu), at least 3 past estimates in any
+    # format, and one request describing the new job; or, with +weights:+ (details["weights"] of an earlier
+    # estimate), just the request. One analysis.
+    def estimate(files, weights: nil)
+      raise InvalidRequestError.new("Pass the domain file, past estimates and the request.", code: "invalid_request") if files.empty?
+
+      request(:post, "/v1/estimate", parts: files.map { |f| ["files", *table(f).to_file] }, fields: options(weights, nil))
+    end
+
+    # Price from files already stored in the team, by id. +model:+ applies a saved estimate model.
+    def estimate_stored(file_ids, model: nil)
+      stored("/v1/estimate", nil, nil, file_ids, model, nil)
+    end
+
     # Upload one or more files (paths or Tables) to the team. Each comes back with its "id", "rows", "columns" and
     # "roles" (what TrueUp read each column as).
     def upload_files(*files)
