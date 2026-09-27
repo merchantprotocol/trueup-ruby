@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-# Each full run uses 2 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+# Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 
 require "csv"
 require "minitest/autorun"
@@ -64,5 +64,41 @@ class ApiTest < Minitest::Test
       TrueUp::Client.new.reconcile(fixture("statement.csv"), TrueUp::Table.content("scan.pdf", "%PDF-1.4"))
     end
     assert_equal [422, "unsupported_file"], [error.status, error.code]
+  end
+
+  def test_stored_files_runs_and_models
+    live!
+    tu = TrueUp::Client.new
+    statement, receiving = tu.upload_files(fixture("statement.csv"), fixture("receiving.csv"))
+    begin
+      assert_equal 8, statement["rows"]
+      assert_equal "receiving.csv", tu.get_file(receiving["id"])["name"]
+      assert_includes tu.list_files.map { |f| f["id"] }, statement["id"]
+      assert_equal File.binread(fixture("statement.csv")), tu.file_content(statement["id"])
+
+      result = tu.reconcile_stored(statement["id"], receiving["id"])
+      assert_equal 7, result["stats"]["paired"]
+      got = tu.get_run(result["run_id"])
+      assert_equal "done", got["run"]["status"]
+      assert_equal 7, got["result"]["stats"]["paired"]
+      page = tu.list_runs(limit: 1)
+      assert_equal 1, page["runs"].size
+      assert page["has_more"]
+      refute_equal page["runs"][0]["id"], tu.list_runs(limit: 1, before: page["runs"][0]["id"])["runs"][0]["id"]
+
+      model_id = tu.create_model(result["run_id"], "sdk test")
+      begin
+        assert_equal "trueup.match-weights", tu.get_model(model_id)["weights"]["format"]
+        again = tu.reconcile_stored(file_ids: [statement["id"], receiving["id"]], model: model_id)
+        assert_equal false, again["details"]["model"]["learned"]
+      ensure
+        tu.delete_model(model_id)
+      end
+      assert_raises(TrueUp::NotFoundError) { tu.get_model(model_id) }
+    ensure
+      tu.delete_file(statement["id"])
+      tu.delete_file(receiving["id"])
+    end
+    assert_raises(TrueUp::NotFoundError) { tu.get_file(statement["id"]) }
   end
 end

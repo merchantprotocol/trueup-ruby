@@ -143,7 +143,99 @@ module TrueUp
       request(:post, "/v1/reconcile", parts: parts, fields: options(weights, answers))
     end
 
+    # Upload one or more files (paths or Tables) to the team. Each comes back with its "id", "rows", "columns" and
+    # "roles" (what TrueUp read each column as).
+    def upload_files(*files)
+      raise InvalidRequestError.new("Pass at least one file to upload.", code: "invalid_request") if files.empty?
+
+      request(:post, "/v1/files", parts: files.map { |f| ["file", *table(f).to_file] })["files"]
+    end
+
+    # The team's stored files.
+    def list_files
+      request(:get, "/v1/files")["files"]
+    end
+
+    def get_file(id)
+      request(:get, "/v1/files/#{esc(id)}")["file"]
+    end
+
+    # The file's bytes, exactly as uploaded (a binary String).
+    def file_content(id)
+      request(:get, "/v1/files/#{esc(id)}/content", binary: true)
+    end
+
+    def delete_file(id)
+      request(:delete, "/v1/files/#{esc(id)}")
+      nil
+    end
+
+    # Reconcile files already stored in the team, by id: two ids (left bills or claims), or +file_ids:+ for TrueUp to
+    # pick the pair. +model:+ applies a saved model instead of learning. The run is kept: its id is "run_id" in the
+    # result. One analysis.
+    def reconcile_stored(left_file_id = nil, right_file_id = nil, file_ids: nil, model: nil, answers: nil)
+      body = if file_ids
+               { "file_ids" => file_ids.to_a }
+             elsif left_file_id && right_file_id
+               { "left_file_id" => left_file_id, "right_file_id" => right_file_id }
+             else
+               raise InvalidRequestError.new("Pass left_file_id and right_file_id, or file_ids:.", code: "invalid_request")
+             end
+      body["model"] = model unless model.nil?
+      body["answers"] = answers unless answers.nil?
+      request(:post, "/v1/reconcile", json: body)
+    end
+
+    # One page of runs on stored files, newest first: { "runs" => [...], "has_more" => bool }.
+    # +limit+ is 1-100; +before+ a run id.
+    def list_runs(limit: nil, before: nil)
+      query = URI.encode_www_form({ "limit" => limit, "before" => before }.compact)
+      request(:get, "/v1/runs#{query.empty? ? "" : "?#{query}"}")
+    end
+
+    # Every run, fetching page after page (an Enumerator without a block).
+    def each_run(&block)
+      return enum_for(:each_run) unless block
+
+      before = nil
+      loop do
+        page = list_runs(limit: 100, before: before)
+        page["runs"].each(&block)
+        break if !page["has_more"] || page["runs"].empty?
+
+        before = page["runs"].last["id"]
+      end
+    end
+
+    # { "run" => {...}, "result" => {...} }: the result has the same shape #reconcile returns.
+    def get_run(id)
+      request(:get, "/v1/runs/#{esc(id)}")
+    end
+
+    # Save what a run learned as a model. Returns the model id.
+    def create_model(run_id, name = nil)
+      request(:post, "/v1/models", json: { "run_id" => run_id, "name" => name }.compact)["id"]
+    end
+
+    def list_models
+      request(:get, "/v1/models")["models"]
+    end
+
+    # One saved model, including its "weights".
+    def get_model(id)
+      request(:get, "/v1/models/#{esc(id)}")["model"]
+    end
+
+    def delete_model(id)
+      request(:delete, "/v1/models/#{esc(id)}")
+      nil
+    end
+
     private
+
+    def esc(id)
+      URI.encode_www_form_component(id.to_s).gsub("+", "%20")
+    end
 
     def present(value)
       value.nil? || value.to_s.empty? ? nil : value.to_s
@@ -160,11 +252,11 @@ module TrueUp
       out
     end
 
-    def request(method, path, json: nil, parts: nil, fields: {})
+    def request(method, path, json: nil, parts: nil, fields: {}, binary: false)
       uri = URI(@base_url + path)
       attempt = 0
       loop do
-        req = method == :get ? Net::HTTP::Get.new(uri) : Net::HTTP::Post.new(uri)
+        req = { get: Net::HTTP::Get, post: Net::HTTP::Post, delete: Net::HTTP::Delete }.fetch(method).new(uri)
         req["Authorization"] = "Bearer #{@api_key}"
         req["Accept"] = "application/json"
         req["User-Agent"] = "trueup-ruby/#{VERSION}"
@@ -187,6 +279,8 @@ module TrueUp
           end
           raise ConnectionError.new("Couldn't reach TrueUp at #{@base_url}: #{e.message}")
         end
+        return res.body.to_s.b if binary && res.code.to_i.between?(200, 299)
+
         data = begin
           res.body.to_s.empty? ? nil : JSON.parse(res.body)
         rescue JSON::ParserError
