@@ -143,6 +143,33 @@ module TrueUp
       request(:post, "/v1/reconcile", parts: parts, fields: options(weights, answers))
     end
 
+    # Match two lists that describe the same things in different words (two catalogs, a price book and an
+    # invoice): each record on +left+ (the list to go through) is paired with its counterpart on +right+ (the list to
+    # search), or reported as having none. A path or a Table. One analysis.
+    #
+    # weights:: details["weights"] from an earlier match, to apply instead of learning again
+    def match(left, right, weights: nil)
+      l = table(left)
+      r = table(right)
+      if l.rows? && r.rows?
+        body = { "left" => { "name" => l.name, "rows" => l.rows }, "right" => { "name" => r.name, "rows" => r.rows } }
+        body["weights"] = weights unless weights.nil?
+        return request(:post, "/v1/match", json: body)
+      end
+      request(:post, "/v1/match", parts: [["left", *l.to_file], ["right", *r.to_file]], fields: options(weights, nil))
+    end
+
+    # Send two or more lists; TrueUp picks the pair to match and puts the shorter on the left. One analysis.
+    def match_files(files, weights: nil)
+      request(:post, "/v1/match", parts: files.map { |f| ["files", *table(f).to_file] }, fields: options(weights, nil))
+    end
+
+    # Match lists already stored in the team, by id. +model:+ applies a saved match model. The run is kept
+    # ("run_id"). One analysis.
+    def match_stored(left_file_id = nil, right_file_id = nil, file_ids: nil, model: nil)
+      stored("/v1/match", left_file_id, right_file_id, file_ids, model, nil)
+    end
+
     # Upload one or more files (paths or Tables) to the team. Each comes back with its "id", "rows", "columns" and
     # "roles" (what TrueUp read each column as).
     def upload_files(*files)
@@ -174,6 +201,10 @@ module TrueUp
     # pick the pair. +model:+ applies a saved model instead of learning. The run is kept: its id is "run_id" in the
     # result. One analysis.
     def reconcile_stored(left_file_id = nil, right_file_id = nil, file_ids: nil, model: nil, answers: nil)
+      stored("/v1/reconcile", left_file_id, right_file_id, file_ids, model, answers)
+    end
+
+    def stored(path, left_file_id, right_file_id, file_ids, model, answers)
       body = if file_ids
                { "file_ids" => file_ids.to_a }
              elsif left_file_id && right_file_id
@@ -183,8 +214,9 @@ module TrueUp
              end
       body["model"] = model unless model.nil?
       body["answers"] = answers unless answers.nil?
-      request(:post, "/v1/reconcile", json: body)
+      request(:post, path, json: body)
     end
+    private :stored
 
     # One page of runs on stored files, newest first: { "runs" => [...], "has_more" => bool }.
     # +limit+ is 1-100; +before+ a run id.

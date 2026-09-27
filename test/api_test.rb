@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-# Each full run uses 4 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+# Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 
 require "csv"
 require "minitest/autorun"
@@ -100,5 +100,20 @@ class ApiTest < Minitest::Test
       tu.delete_file(receiving["id"])
     end
     assert_raises(TrueUp::NotFoundError) { tu.get_file(statement["id"]) }
+  end
+
+  MATCHED = [%w[1 1], %w[2 2], %w[3 3], %w[4 5]].freeze
+
+  def test_match_two_lists_then_reuse_the_learning
+    live!
+    tu = TrueUp::Client.new
+    result = tu.match(fixture("invoice.csv"), fixture("catalog.csv"))
+    assert_equal "match", result["analysis"]
+    assert_equal MATCHED, result["details"]["pairs"].map { |p| p[0, 2] }
+    assert_equal ["5"], result["findings"].select { |f| f["kind"] == "only_left" }.map { |f| f["subject"] }
+    again = tu.match(TrueUp::Table.rows("invoice.csv", rows("invoice.csv")), TrueUp::Table.rows("catalog.csv", rows("catalog.csv")),
+                     weights: result["details"]["weights"])
+    assert_equal MATCHED, again["details"]["pairs"].map { |p| p[0, 2] }
+    assert_equal false, again["details"]["model"]["learned"]
   end
 end
