@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 # Integration tests against the live TrueUp API. Need TRUEUP_API_KEY (and optionally TRUEUP_BASE_URL).
-# Each full run uses 6 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
+# Each full run uses 8 analyses. Run in Docker: `just test` (or `docker compose run --rm test`).
 
 require "csv"
 require "minitest/autorun"
@@ -115,5 +115,17 @@ class ApiTest < Minitest::Test
                      weights: result["details"]["weights"])
     assert_equal MATCHED, again["details"]["pairs"].map { |p| p[0, 2] }
     assert_equal false, again["details"]["model"]["learned"]
+  end
+
+  def test_audit_six_invoices_then_one_against_the_saved_laws
+    live!
+    tu = TrueUp::Client.new
+    result = tu.audit((1..6).map { |i| fixture("invoices/inv-104#{i}.txt") })
+    assert_equal "audit", result["analysis"]
+    assert_equal [["inv-1045.txt", "yes", 200]], result["findings"].map { |f| [f["subject"], f["status"], f["amount"]] }
+    assert_includes result["details"]["laws"].map { |l| l["law"] }, "subtotal + tax amount = total"
+    one = tu.audit([fixture("invoices/inv-1045.txt")], weights: result["details"]["weights"])
+    assert_equal false, one["details"]["model"]["learned"]
+    assert_equal ["inv-1045.txt"], one["findings"].map { |f| f["subject"] }
   end
 end
