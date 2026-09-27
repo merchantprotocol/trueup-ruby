@@ -170,6 +170,21 @@ module TrueUp
       stored("/v1/match", left_file_id, right_file_id, file_ids, model, nil)
     end
 
+    # Find what doesn't add up. Text documents (invoices, statements, 4 or more of a kind): TrueUp learns the
+    # arithmetic each kind obeys and flags the ones that break it. One table: the same for its rows, plus repeated
+    # rows. +weights:+ (details["weights"] of an earlier audit) checks new documents against the same laws.
+    # One analysis.
+    def audit(files, weights: nil)
+      raise InvalidRequestError.new("Pass the documents (or one table) to audit.", code: "invalid_request") if files.empty?
+
+      request(:post, "/v1/audit", parts: files.map { |f| ["files", *table(f).to_file] }, fields: options(weights, nil))
+    end
+
+    # Audit files already stored in the team, by id. +model:+ applies a saved audit model. The run is kept.
+    def audit_stored(file_ids, model: nil)
+      stored("/v1/audit", nil, nil, file_ids, model, nil)
+    end
+
     # Upload one or more files (paths or Tables) to the team. Each comes back with its "id", "rows", "columns" and
     # "roles" (what TrueUp read each column as).
     def upload_files(*files)
